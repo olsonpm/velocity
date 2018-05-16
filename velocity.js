@@ -65,6 +65,8 @@ var DEFAULT_SPEED = 1;
 
 var DEFAULT_SYNC = true;
 
+var TWEEN_NUMBER_REGEX = /[\d\.-]/;
+
 var CLASSNAME = "velocity-animating";
 
 var Duration = {
@@ -174,41 +176,6 @@ function isEmptyObject(variable) {
 };
 
 /**
- * Shim for Object.assign on IE, based on:
- * https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object/assign#Polyfill
- */ var _objectAssign = Object.assign || function(target) {
-    var sources = [];
-    for (var _i = 1; _i < arguments.length; _i++) {
-        sources[_i - 1] = arguments[_i];
-    }
-    if (target == null) {
-        throw new TypeError("Cannot convert undefined or null to object");
-    }
-    var to = Object(target);
-    for (var index = 0; index < sources.length; index++) {
-        var nextSource = sources[index];
-        if (nextSource != null) {
-            for (var nextKey in nextSource) {
-                // Avoid bugs when hasOwnProperty is shadowed
-                if (Object.prototype.hasOwnProperty.call(nextSource, nextKey)) {
-                    to[nextKey] = nextSource[nextKey];
-                }
-            }
-        }
-    }
-    return to;
-};
-
-/**
- * Shim for "string".startsWith on IE, based on:
- * https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/String/startsWith#Polyfill
- */ var _startsWith = String.prototype.startsWith ? function(str, searchString, position) {
-    return str.startsWith(searchString, position);
-} : function(str, searchString, position) {
-    return str.substr(!position || position < 0 ? 0 : +position, searchString.length) === searchString;
-};
-
-/**
  * Check whether a value belongs to an array
  * https://jsperf.com/includes-vs-indexof-vs-while-loop/6
  * @param array The given array
@@ -315,6 +282,69 @@ function getValue(args) {
  *
  * Licensed under the MIT license. See LICENSE file in the project root for details.
  *
+ * Default action.
+ */ var VelocityStatic;
+
+(function(VelocityStatic) {
+    /**
+     * When the stop action is triggered, the elements' currently active call is immediately stopped. The active call might have
+     * been applied to multiple elements, in which case all of the call's elements will be stopped. When an element
+     * is stopped, the next item in its animation queue is immediately triggered.
+     * An additional argument may be passed in to clear an element's remaining queued calls. Either true (which defaults to the "fx" queue)
+     * or a custom queue string can be passed in.
+     * Note: The stop command runs prior to Velocity's Queueing phase since its behavior is intended to take effect *immediately*,
+     * regardless of the element's current queue state.
+     *
+     * @param {HTMLorSVGElement[]} elements The collection of HTML or SVG elements
+     * @param {StrictVelocityOptions} The strict Velocity options
+     * @param {Promise<HTMLorSVGElement[]>} An optional promise if the user uses promises
+     * @param {(value?: (HTMLorSVGElement[] | VelocityResult)) => void} resolver The resolve method of the promise
+     */
+    function defaultAction(args, elements, promiseHandler, action) {
+        // TODO: default is wrong, should be runSequence based, and needs all arguments
+        if (isString(action) && VelocityStatic.Redirects[action]) {
+            var options = isPlainObject(args[0]) ? args[0] : {}, opts_1 = __assign({}, options), durationOriginal_1 = parseFloat(options.duration), delayOriginal_1 = parseFloat(options.delay) || 0;
+            /* If the backwards option was passed in, reverse the element set so that elements animate from the last to the first. */            if (opts_1.backwards === true) {
+                elements = elements.reverse();
+            }
+            /* Individually trigger the redirect for each element in the set to prevent users from having to handle iteration logic in their redirect. */            elements.forEach(function(element, elementIndex) {
+                /* If the stagger option was passed in, successively delay each element by the stagger value (in ms). Retain the original delay value. */
+                if (parseFloat(opts_1.stagger)) {
+                    opts_1.delay = delayOriginal_1 + parseFloat(opts_1.stagger) * elementIndex;
+                } else if (isFunction(opts_1.stagger)) {
+                    opts_1.delay = delayOriginal_1 + opts_1.stagger.call(element, elementIndex, elements.length);
+                }
+                /* If the drag option was passed in, successively increase/decrease (depending on the presense of opts.backwards)
+                 the duration of each element's animation, using floors to prevent producing very short durations. */                if (opts_1.drag) {
+                    /* Default the duration of UI pack effects (callouts and transitions) to 1000ms instead of the usual default duration of 400ms. */
+                    opts_1.duration = durationOriginal_1 || (/^(callout|transition)/.test(action) ? 1e3 : DEFAULT_DURATION);
+                    /* For each element, take the greater duration of: A) animation completion percentage relative to the original duration,
+                     B) 75% of the original duration, or C) a 200ms fallback (in case duration is already set to a low value).
+                     The end result is a baseline of 75% of the redirect's duration that increases/decreases as the end of the element set is approached. */                    opts_1.duration = Math.max(opts_1.duration * (opts_1.backwards ? 1 - elementIndex / elements.length : (elementIndex + 1) / elements.length), opts_1.duration * .75, 200);
+                }
+                /* Pass in the call's opts object so that the redirect can optionally extend it. It defaults to an empty object instead of null to
+                 reduce the opts checking logic required inside the redirect. */                VelocityStatic.Redirects[action].call(element, element, opts_1, elementIndex, elements.length, elements, promiseHandler && promiseHandler._resolver);
+            });
+            /* Since the animation logic resides within the redirect's own code, abort the remainder of this call.
+             (The performance overhead up to this point is virtually non-existant.) */
+            /* Note: The jQuery call chain is kept intact by returning the complete element set. */        } else {
+            var abortError = "Velocity: First argument (" + action + ") was not a property map, a known action, or a registered redirect. Aborting.";
+            if (promiseHandler) {
+                promiseHandler._rejecter(new Error(abortError));
+            } else if (window.console) {
+                console.log(abortError);
+            }
+        }
+    }
+    VelocityStatic.registerAction([ "default", defaultAction ], true);
+})(VelocityStatic || (VelocityStatic = {}));
+
+///<reference path="actions.ts" />
+/*
+ * VelocityJS.org (C) 2014-2017 Julian Shapiro.
+ *
+ * Licensed under the MIT license. See LICENSE file in the project root for details.
+ *
  * Finish all animation.
  */ var VelocityStatic;
 
@@ -345,12 +375,11 @@ function getValue(args) {
                 animation._flags |= 4 /* STARTED */;
             }
             for (var property in animation.tweens) {
-                var tween_1 = animation.tweens[property], sequence = tween_1.sequence, pattern = sequence.pattern;
+                var tween_1 = animation.tweens[property], pattern = tween_1.pattern;
                 var currentValue = "", i = 0;
                 if (pattern) {
-                    var endValues = sequence[sequence.length - 1];
                     for (;i < pattern.length; i++) {
-                        var endValue = endValues[i];
+                        var endValue = tween_1.end[i];
                         currentValue += endValue == null ? pattern[i] : endValue;
                     }
                 }
@@ -821,17 +850,11 @@ function getValue(args) {
             },
             tweens: null
         }, result = {};
-        var properties = args[1], singleResult, maybeSequence, easing = args[2], count = 0;
+        var properties = args[1], singleResult, easing = args[2], count = 0;
         if (isString(args[1])) {
-            if (VelocityStatic.Sequences && VelocityStatic.Sequences[args[1]]) {
-                maybeSequence = VelocityStatic.Sequences[args[1]];
-                properties = {};
-                easing = args[2];
-            } else {
-                singleResult = true;
-                properties = (_a = {}, _a[args[1]] = args[2], _a);
-                easing = args[3];
-            }
+            singleResult = true;
+            properties = (_a = {}, _a[args[1]] = args[2], _a);
+            easing = args[3];
         } else if (Array.isArray(args[1])) {
             singleResult = true;
             properties = {
@@ -852,43 +875,25 @@ function getValue(args) {
                 }
             }
         }
-        var activeEasing = validateEasing(getValue(easing, VelocityStatic.defaults.easing), DEFAULT_DURATION);
-        if (maybeSequence) {
-            VelocityStatic.expandSequence(fakeAnimation, maybeSequence);
-        } else {
-            VelocityStatic.expandProperties(fakeAnimation, properties);
-        }
+        var activeEasing = validateEasing(getValue(easing, VelocityStatic.defaults.easing), 1e3);
+        VelocityStatic.expandProperties(fakeAnimation, properties);
         for (var property in fakeAnimation.tweens) {
             // For every element, iterate through each property.
-            var tween_2 = fakeAnimation.tweens[property], sequence = tween_2.sequence, pattern = sequence.pattern;
-            var currentValue = "", i = 0;
+            var tween_2 = fakeAnimation.tweens[property], easing_1 = tween_2.easing || activeEasing, pattern = tween_2.pattern;
+            var currentValue = "";
             count++;
             if (pattern) {
-                var easingComplete = (tween_2.easing || activeEasing)(percentComplete, 0, 1, property), best = 0;
-                for (var i_1 = 0; i_1 < sequence.length - 1; i_1++) {
-                    if (sequence[i_1].percent < easingComplete) {
-                        best = i_1;
-                    }
-                }
-                var tweenFrom = sequence[best], tweenTo = sequence[best + 1] || tweenFrom, tweenPercent = (percentComplete - tweenFrom.percent) / (tweenTo.percent - tweenFrom.percent), easing_1 = tweenTo.easing || VelocityStatic.Easing.linearEasing;
-                //console.log("tick", percentComplete, tweenPercent, best, tweenFrom, tweenTo, sequence)
-                                for (;i < pattern.length; i++) {
-                    var startValue = tweenFrom[i];
+                for (var i = 0; i < pattern.length; i++) {
+                    var startValue = tween_2.start[i];
                     if (startValue == null) {
                         currentValue += pattern[i];
                     } else {
-                        var endValue = tweenTo[i];
-                        if (startValue === endValue) {
-                            currentValue += startValue;
-                        } else {
-                            // All easings must deal with numbers except for our internal ones.
-                            var result_1 = easing_1(tweenPercent, startValue, endValue, property);
-                            currentValue += pattern[i] === true ? Math.round(result_1) : result_1;
-                        }
+                        var result_1 = easing_1(percentComplete, startValue, tween_2.end[i], property);
+                        currentValue += pattern[i] === true ? Math.round(result_1) : result_1;
                     }
                 }
-                result[property] = currentValue;
             }
+            result[property] = currentValue;
         }
         if (singleResult && count === 1) {
             for (var property in result) {
@@ -918,58 +923,58 @@ function getValue(args) {
         /**
          * Detect if this is a NodeJS or web browser
          */
-        State.isClient = window && window === window.window, 
+        State.isClient = window && window === window.window,
         /**
          * Detect mobile devices to determine if mobileHA should be turned
          * on.
          */
-        State.isMobile = State.isClient && /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent), 
+        State.isMobile = State.isClient && /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent),
         /**
          * The mobileHA option's behavior changes on older Android devices
          * (Gingerbread, versions 2.3.3-2.3.7).
          */
-        State.isAndroid = State.isClient && /Android/i.test(navigator.userAgent), 
+        State.isAndroid = State.isClient && /Android/i.test(navigator.userAgent),
         /**
          * The mobileHA option's behavior changes on older Android devices
          * (Gingerbread, versions 2.3.3-2.3.7).
          */
-        State.isGingerbread = State.isClient && /Android 2\.3\.[3-7]/i.test(navigator.userAgent), 
+        State.isGingerbread = State.isClient && /Android 2\.3\.[3-7]/i.test(navigator.userAgent),
         /**
          * Chrome browser
          */
-        State.isChrome = State.isClient && window.chrome, 
+        State.isChrome = State.isClient && window.chrome,
         /**
          * Firefox browser
          */
-        State.isFirefox = State.isClient && /Firefox/i.test(navigator.userAgent), 
+        State.isFirefox = State.isClient && /Firefox/i.test(navigator.userAgent),
         /**
          * Create a cached element for re-use when checking for CSS property
          * prefixes.
          */
-        State.prefixElement = State.isClient && document.createElement("div"), 
+        State.prefixElement = State.isClient && document.createElement("div"),
         /**
          * Retrieve the appropriate scroll anchor and property name for the
          * browser: https://developer.mozilla.org/en-US/docs/Web/API/Window.scrollY
          */
-        State.windowScrollAnchor = State.isClient && window.pageYOffset !== undefined, 
+        State.windowScrollAnchor = State.isClient && window.pageYOffset !== undefined,
         /**
          * Cache the anchor used for animating window scrolling.
          */
-        State.scrollAnchor = State.windowScrollAnchor ? window : !State.isClient || document.documentElement || document.body.parentNode || document.body, 
+        State.scrollAnchor = State.windowScrollAnchor ? window : !State.isClient || document.documentElement || document.body.parentNode || document.body,
         /**
          * Cache the browser-specific property names associated with the
          * scroll anchor.
          */
-        State.scrollPropertyLeft = State.windowScrollAnchor ? "pageXOffset" : "scrollLeft", 
+        State.scrollPropertyLeft = State.windowScrollAnchor ? "pageXOffset" : "scrollLeft",
         /**
          * Cache the browser-specific property names associated with the
          * scroll anchor.
          */
-        State.scrollPropertyTop = State.windowScrollAnchor ? "pageYOffset" : "scrollTop", 
+        State.scrollPropertyTop = State.windowScrollAnchor ? "pageYOffset" : "scrollTop",
         /**
          * The className we add / remove when animating.
          */
-        State.className = CLASSNAME, 
+        State.className = CLASSNAME,
         /**
          * Keep track of whether our RAF tick is running.
          */
@@ -1231,7 +1236,7 @@ var VelocityStatic;
     (function(CSS) {
         // TODO: This is still a complete mess
         function computePropertyValue(element, property) {
-            var data = Data(element), 
+            var data = Data(element),
             // If computedStyle is cached, use it.
             computedStyle = data && data.computedStyle ? data.computedStyle : window.getComputedStyle(element, null);
             var computedValue = 0;
@@ -1382,6 +1387,11 @@ var VelocityStatic;
          */
         function setPropertyValue(element, propertyName, propertyValue, fn) {
             var data = Data(element);
+            if (isString(propertyValue) && propertyValue[0] === "c" && propertyValue[1] === "a" && propertyValue[2] === "l" && propertyValue[3] === "c" && propertyValue[4] === "(" && propertyValue[5] === "0" && propertyValue[5] === " ") {
+                // Make sure we un-calc unit changing values - try not to trigger
+                // this code any more often than we have to since it's expensive
+                propertyValue = propertyValue.replace(/^calc\(0[^\d]* \+ ([^\(\)]+)\)$/, "$1");
+            }
             if (data && data.cache[propertyName] !== propertyValue) {
                 // By setting it to undefined we force a true "get" later
                 data.cache[propertyName] = propertyValue || undefined;
@@ -1429,15 +1439,9 @@ var VelocityStatic;
         }
         Easing.registerEasing = registerEasing;
         VelocityStatic.registerAction([ "registerEasing", registerEasing ], true);
-        /**
-         * Linear easing, used for sequence parts that don't have an actual easing
-         * function.
-         */        function linearEasing(percentComplete, startValue, endValue, property) {
+        /* Basic (same as jQuery) easings. */        registerEasing([ "linear", function(percentComplete, startValue, endValue) {
             return startValue + percentComplete * (endValue - startValue);
-        }
-        Easing.linearEasing = linearEasing;
-        // Basic easings.
-                registerEasing([ "linear", linearEasing ]);
+        } ]);
         registerEasing([ "swing", function(percentComplete, startValue, endValue) {
             return startValue + (.5 - Math.cos(percentComplete * Math.PI) / 2) * (endValue - startValue);
         } ]);
@@ -2168,8 +2172,8 @@ var VelocityStatic;
  */ var VelocityStatic;
 
 (function(VelocityStatic) {
-    VelocityStatic.inlineRx = /^(b|big|i|small|tt|abbr|acronym|cite|code|dfn|em|kbd|strong|samp|let|a|bdo|br|img|map|object|q|script|span|sub|sup|button|input|label|select|textarea)$/i, 
-    VelocityStatic.listItemRx = /^(li)$/i, VelocityStatic.tableRowRx = /^(tr)$/i, VelocityStatic.tableRx = /^(table)$/i, 
+    VelocityStatic.inlineRx = /^(b|big|i|small|tt|abbr|acronym|cite|code|dfn|em|kbd|strong|samp|let|a|bdo|br|img|map|object|q|script|span|sub|sup|button|input|label|select|textarea)$/i,
+    VelocityStatic.listItemRx = /^(li)$/i, VelocityStatic.tableRowRx = /^(tr)$/i, VelocityStatic.tableRx = /^(table)$/i,
     VelocityStatic.tableRowGroupRx = /^(tbody)$/i;
     function display(element, propertyValue) {
         var style = element.style;
@@ -3037,7 +3041,7 @@ var VelocityStatic;
     /* Animate the expansion/contraction of the elements' parent's height for In/Out effects. */
     function animateParentHeight(elements, direction, totalDuration, stagger) {
         var totalHeightDelta = 0, parentNode;
-        /* Sum the total height (including padding and margin) of all targeted elements. */        
+        /* Sum the total height (including padding and margin) of all targeted elements. */
         /* Sum the total height (including padding and margin) of all targeted elements. */
         (elements.nodeType ? [ elements ] : elements).forEach(function(element, i) {
             if (stagger) {
@@ -3193,457 +3197,79 @@ var VelocityStatic;
  *
  * Licensed under the MIT license. See LICENSE file in the project root for details.
  *
- * Tweens
+ * Sequence Running
  */
+/**
+ * Perform a deep copy of an object - also copies children so they're not
+ * going to be affected by changing original.
+ */
+function _deepCopyObject(target) {
+    var sources = [];
+    for (var _i = 1; _i < arguments.length; _i++) {
+        sources[_i - 1] = arguments[_i];
+    }
+    if (target == null) {
+        throw new TypeError("Cannot convert undefined or null to object");
+    }
+    var to = Object(target), hasOwnProperty = Object.prototype.hasOwnProperty;
+    var source;
+    while (source = sources.shift()) {
+        if (source != null) {
+            for (var key in source) {
+                if (hasOwnProperty.call(source, key)) {
+                    var value = source[key];
+                    if (Array.isArray(value)) {
+                        _deepCopyObject(to[key] = [], value);
+                    } else if (isPlainObject(value)) {
+                        _deepCopyObject(to[key] = {}, value);
+                    } else {
+                        to[key] = value;
+                    }
+                }
+            }
+        }
+    }
+    return to;
+}
+
 var VelocityStatic;
 
 (function(VelocityStatic) {
-    var rxHex = /^#([A-f\d]{3}){1,2}$/i;
-    var commands = new Map();
-    commands.set("function", function(value, element, elements, elementArrayIndex, propertyName, tween) {
-        return value.call(element, elementArrayIndex, elements.length);
-    });
-    commands.set("number", function(value, element, elements, elementArrayIndex, propertyName, tween) {
-        return value + VelocityStatic.getNormalizationUnit(tween.fn);
-    });
-    commands.set("string", function(value, element, elements, elementArrayIndex, propertyName, tween) {
-        return VelocityStatic.CSS.fixColors(value);
-    });
-    commands.set("undefined", function(value, element, elements, elementArrayIndex, propertyName, tween) {
-        return VelocityStatic.CSS.fixColors(VelocityStatic.CSS.getPropertyValue(element, propertyName, tween.fn) || "");
-    });
-    /**
-     * Expand a VelocityProperty argument into a valid sparse Tween array. This
-     * pre-allocates the array as it is then the correct size and slightly
-     * faster to access.
-     */    function expandProperties(animation, properties) {
-        var tweens = animation.tweens = createEmptyObject(), elements = animation.elements, element = animation.element, elementArrayIndex = elements.indexOf(element), data = Data(element), queue = getValue(animation.queue, animation.options.queue), duration = getValue(animation.options.duration, VelocityStatic.defaults.duration);
-        for (var property in properties) {
-            var propertyName = VelocityStatic.CSS.camelCase(property);
-            var valueData = properties[property], fn = VelocityStatic.getNormalization(element, propertyName);
-            if (!fn && propertyName !== "tween") {
-                if (VelocityStatic.debug) {
-                    console.log("Skipping [" + property + "] due to a lack of browser support.");
-                }
-                continue;
-            }
-            if (valueData == null) {
-                if (VelocityStatic.debug) {
-                    console.log("Skipping [" + property + "] due to no value supplied.");
-                }
-                continue;
-            }
-            var tween_3 = tweens[propertyName] = createEmptyObject();
-            var endValue = void 0, startValue = void 0;
-            tween_3.fn = fn;
-            if (isFunction(valueData)) {
-                // If we have a function as the main argument then resolve
-                // it first, in case it returns an array that needs to be
-                // split.
-                valueData = valueData.call(element, elementArrayIndex, elements.length, elements);
-            }
-            if (Array.isArray(valueData)) {
-                // valueData is an array in the form of
-                // [ endValue, [, easing] [, startValue] ]
-                var arr1 = valueData[1], arr2 = valueData[2];
-                endValue = valueData[0];
-                if (isString(arr1) && (/^[\d-]/.test(arr1) || rxHex.test(arr1)) || isFunction(arr1) || isNumber(arr1)) {
-                    startValue = arr1;
-                } else if (isString(arr1) && VelocityStatic.Easing.Easings[arr1] || Array.isArray(arr1)) {
-                    tween_3.easing = validateEasing(arr1, duration);
-                    startValue = arr2;
-                } else {
-                    startValue = arr1 || arr2;
-                }
-            } else {
-                endValue = valueData;
-            }
-            tween_3.end = commands.get(typeof endValue)(endValue, element, elements, elementArrayIndex, propertyName, tween_3);
-            if (startValue != null || (queue === false || data.queueList[queue] === undefined)) {
-                tween_3.start = commands.get(typeof startValue)(startValue, element, elements, elementArrayIndex, propertyName, tween_3);
-                explodeTween(propertyName, tween_3, duration);
-            }
-        }
-    }
-    VelocityStatic.expandProperties = expandProperties;
-    // TODO: Needs a better match for "translate3d" etc - a number must be preceded by some form of break...
-        var rxToken = /((?:[+\-*/]=)?(?:[+-]?\d*\.\d+|[+-]?\d+)[a-z%]*|(?:.(?!$|[+-]?\d|[+\-*/]=[+-]?\d))+.|.)/g, rxNumber = /^([+\-*/]=)?([+-]?\d*\.\d+|[+-]?\d+)(.*)$/;
-    /**
-     * Find a pattern between multiple strings, return a VelocitySequence with
-     * the pattern and the tokenised values.
-     *
-     * If number then animate.
-     * If a string then must match.
-     * If units then convert between them by wrapping in a calc().
-     * - If already in a calc then nest another layer.
-     * If in an rgba() then the first three numbers are rounded.
-     */    function findPattern(parts, propertyName) {
-        var partsLength = parts.length, tokens = [], indexes = [];
-        var numbers;
-        // First tokenise the strings - these have all values, we will pull
-        // numbers later.
-                for (var part = 0; part < partsLength; part++) {
-            if (isString(parts[part])) {
-                tokens[part] = _objectAssign([], parts[part].match(rxToken));
-                indexes[part] = 0;
-                // If it matches more than one thing then we've got a number.
-                                numbers = numbers || tokens[part].length > 1;
-                //console.log("tokens:", parts[part], tokens[part])
-                        } else {
-                // We have an incomplete lineup, it will get tried again later...
-                return;
-            }
-        }
-        var sequence = [], pattern = sequence.pattern = [], addString = function(text) {
-            if (isString(pattern[pattern.length - 1])) {
-                pattern[pattern.length - 1] += text;
-            } else if (text) {
-                pattern.push(text);
-                for (var part = 0; part < partsLength; part++) {
-                    sequence[part].push(null);
-                }
-            }
-        }, returnStringType = function() {
-            if (numbers || pattern.length > 1) {
-                //console.error("Velocity: Trying to pattern match mis-matched strings " + propertyName + ":", parts);
-                return;
-            }
-            var isDisplay = propertyName === "display", isVisibility = propertyName === "visibility";
-            for (var part = 0; part < partsLength; part++) {
-                var value = parts[part];
-                sequence[part][0] = value;
-                // Don't care about duration...
-                                sequence[part].easing = validateEasing(isDisplay && value === "none" || isVisibility && value === "hidden" || !isDisplay && !isVisibility ? "at-end" : "at-start", 400);
-            }
-            pattern[0] = false;
-            return sequence;
-        };
-        var more = true;
-        for (var part = 0; part < partsLength; part++) {
-            sequence[part] = [];
-        }
-        while (more) {
-            var bits = [], units = [];
-            var text = void 0, unitless = false, numbers_1 = false;
-            for (var part = 0; part < partsLength; part++) {
-                var index = indexes[part]++, token = tokens[part][index];
-                if (token) {
-                    var num = token.match(rxNumber);
- // [ignore, change, number, unit]
-                                        if (num) {
-                        // It's a number, possibly with a += change and unit.
-                        if (text) {
-                            return returnStringType();
+    /* Note: Sequence calls must use Velocity's single-object arguments syntax. */
+    function RunSequence(originalSequence) {
+        var sequence = _deepCopyObject([], originalSequence);
+        if (sequence.length > 1) {
+            sequence.reverse().forEach(function(currentCall, i) {
+                var nextCall = sequence[i + 1];
+                if (nextCall) {
+                    /* Parallel sequence calls (indicated via sequenceQueue:false) are triggered
+                     in the previous call's begin callback. Otherwise, chained calls are normally triggered
+                     in the previous call's complete callback. */
+                    var currentCallOptions = currentCall.o || currentCall.options, nextCallOptions = nextCall.o || nextCall.options;
+                    var timing = currentCallOptions && currentCallOptions.sequenceQueue === false ? "begin" : "complete", callbackOriginal_1 = nextCallOptions && nextCallOptions[timing], options = {};
+                    options[timing] = function() {
+                        var nextCallElements = nextCall.e || nextCall.elements;
+                        var elements = nextCallElements.nodeType ? [ nextCallElements ] : nextCallElements;
+                        if (callbackOriginal_1) {
+                            callbackOriginal_1.call(elements, elements);
                         }
-                        var digits = parseFloat(num[2]), unit = num[3], change = num[1] ? num[1][0] + unit : undefined, changeOrUnit = change || unit;
-                        if (!_inArray(units, changeOrUnit)) {
-                            // Will be an empty string at the least.
-                            units.push(changeOrUnit);
-                        }
-                        if (!unit) {
-                            if (digits) {
-                                numbers_1 = true;
-                            } else {
-                                unitless = true;
-                            }
-                        }
-                        bits[part] = change ? [ digits, changeOrUnit, true ] : [ digits, changeOrUnit ];
-                    } else if (bits.length) {
-                        return returnStringType();
+                        VelocityFn(currentCall);
+                    };
+                    if (nextCall.o) {
+                        nextCall.o = __assign({}, nextCallOptions, options);
                     } else {
-                        // It's a string.
-                        if (!text) {
-                            text = token;
-                        } else if (text !== token) {
-                            return returnStringType();
-                        }
+                        nextCall.options = __assign({}, nextCallOptions, options);
                     }
-                } else if (!part) {
-                    for (;part < partsLength; part++) {
-                        var index_1 = indexes[part]++, token_1 = tokens[part][index_1];
-                        if (token_1) {
-                            return returnStringType();
-                        }
-                    }
-                    // IMPORTANT: This is the exit point.
-                                        more = false;
-                    break;
-                } else {
-                    // Different
-                    return;
                 }
-            }
-            if (text) {
-                addString(text);
-            } else if (units.length) {
-                if (units.length === 2 && unitless && !numbers_1) {
-                    // If we only have two units, and one is empty, and it's only empty on "0", then treat us as having one unit
-                    units.splice(units[0] ? 1 : 0, 1);
-                }
-                if (units.length === 1) {
-                    // All the same units, so append number then unit.
-                    var unit = units[0], firstLetter = unit[0];
-                    if (firstLetter === "+" || firstLetter === "-" || firstLetter === "*" || firstLetter === "/") {
-                        if (propertyName) {
-                            console.error("Velocity: The first property must not contain a relative function " + propertyName + ":", parts);
-                        }
-                        return;
-                    }
-                    pattern.push(false);
-                    for (var part = 0; part < partsLength; part++) {
-                        sequence[part].push(bits[part][0]);
-                    }
-                    addString(unit);
-                } else {
-                    // Multiple units, so must be inside a calc.
-                    addString("calc(");
-                    var patternCalc = pattern.length - 1;
- // Store the beginning of our calc.
-                                        for (var i = 0; i < units.length; i++) {
-                        var unit = units[i];
-                        var firstLetter = unit[0], isComplex = firstLetter === "*" || firstLetter === "/", isMaths = isComplex || firstLetter === "+" || firstLetter === "-";
-                        if (isComplex) {
-                            // TODO: Not sure this should be done automatically!
-                            pattern[patternCalc] += "(";
-                            addString(")");
-                        }
-                        if (i) {
-                            addString(" " + (isMaths ? firstLetter : "+") + " ");
-                        }
-                        pattern.push(false);
-                        for (var part = 0; part < partsLength; part++) {
-                            var bit = bits[part], value = bit[1] === unit ? bit[0] : bit.length === 3 ? sequence[part - 1][sequence[part - 1].length - 1] : isComplex ? 1 : 0;
-                            sequence[part].push(value);
-                        }
-                        addString(isMaths ? unit.substring(1) : unit);
-                    }
-                    addString(")");
-                }
-            }
+            });
+            sequence.reverse();
         }
-        // We've got here, so a valid sequence - now check and fix RGB rounding
-        // and calc() nesting...
-        // TODO: Nested calc(a + calc(b + c)) -> calc(a + (b + c))
-                for (var i = 0, inRGB = 0; i < pattern.length; i++) {
-            var text = pattern[i];
-            if (isString(text)) {
-                if (inRGB && text.indexOf(",") >= 0) {
-                    inRGB++;
-                } else if (text.indexOf("rgb") >= 0) {
-                    inRGB = 1;
-                }
-            } else if (inRGB) {
-                if (inRGB < 4) {
-                    pattern[i] = true;
-                } else {
-                    inRGB = 0;
-                }
-            }
-        }
-        return sequence;
+        VelocityFn(sequence[0]);
     }
-    VelocityStatic.findPattern = findPattern;
-    /**
-     * Convert a string-based tween with start and end strings, into a pattern
-     * based tween with arrays.
-     */    function explodeTween(propertyName, tween, duration, starting) {
-        var startValue = tween.start, endValue = tween.end;
-        if (!isString(endValue) || !isString(startValue)) {
-            return;
-        }
-        var sequence = findPattern([ startValue, endValue ], propertyName);
-        if (!sequence && starting) {
-            // This little piece will take a startValue, split out the
-            // various numbers in it, then copy the endValue into the
-            // startValue while replacing the numbers in it to match the
-            // original start numbers as a repeating sequence.
-            // Finally this function will run again with the new
-            // startValue and a now matching pattern.
-            var startNumbers_1 = startValue.match(/\d\.?\d*/g) || [ "0" ], count_1 = startNumbers_1.length, index_2 = 0;
-            sequence = findPattern([ endValue.replace(/\d+\.?\d*/g, function() {
-                return startNumbers_1[index_2++ % count_1];
-            }), endValue ], propertyName);
-        }
-        if (sequence) {
-            if (VelocityStatic.debug) {
-                console.log("Velocity: Sequence found:", sequence);
-            }
-            sequence[0].percent = 0;
-            sequence[1].percent = 1;
-            tween.sequence = sequence;
-            switch (tween.easing) {
-              case VelocityStatic.Easing.Easings["at-start"]:
-              case VelocityStatic.Easing.Easings["during"]:
-              case VelocityStatic.Easing.Easings["at-end"]:
-                sequence[0].easing = sequence[1].easing = tween.easing;
-            }
-        }
-    }
-    /**
-     * Expand all queued animations that haven't gone yet
-     *
-     * This will automatically expand the properties map for any recently added
-     * animations so that the start and end values are correct.
-     */    function validateTweens(activeCall) {
-        // This might be called on an already-ready animation
-        if (VelocityStatic.State.firstNew === activeCall) {
-            VelocityStatic.State.firstNew = activeCall._next;
-        }
-        // Check if we're actually already ready
-                if (activeCall._flags & 1 /* EXPANDED */) {
-            return;
-        }
-        var element = activeCall.element, tweens = activeCall.tweens, duration = getValue(activeCall.options.duration, VelocityStatic.defaults.duration);
-        for (var propertyName in tweens) {
-            var tween_4 = tweens[propertyName];
-            if (tween_4.start == null) {
-                // Get the start value as it's not been passed in
-                var startValue = VelocityStatic.CSS.getPropertyValue(activeCall.element, propertyName);
-                if (isString(startValue)) {
-                    tween_4.start = VelocityStatic.CSS.fixColors(startValue);
-                    explodeTween(propertyName, tween_4, duration, true);
-                } else if (!Array.isArray(startValue)) {
-                    console.warn("bad type", tween_4, propertyName, startValue);
-                }
-            }
-            if (VelocityStatic.debug) {
-                console.log("tweensContainer (" + propertyName + "): " + JSON.stringify(tween_4), element);
-            }
-        }
-        activeCall._flags |= 1 /* EXPANDED */;
-    }
-    VelocityStatic.validateTweens = validateTweens;
-})(VelocityStatic || (VelocityStatic = {}));
-
-///<reference path="./tweens.ts" />
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- */ var VelocityStatic;
-
-(function(VelocityStatic) {
-    VelocityStatic.Sequences = createEmptyObject();
-    var rxPercents = /(\d*\.\d+|\d+\.?|from|to)/g;
-    function expandSequence(animation, sequence) {
-        var tweens = animation.tweens = createEmptyObject(), element = animation.element;
-        for (var propertyName in sequence.tweens) {
-            var fn = VelocityStatic.getNormalization(element, propertyName);
-            if (!fn && propertyName !== "tween") {
-                if (VelocityStatic.debug) {
-                    console.log("Skipping [" + propertyName + "] due to a lack of browser support.");
-                }
-                continue;
-            }
-            tweens[propertyName] = {
-                fn: fn,
-                sequence: sequence.tweens[propertyName]
-            };
-        }
-    }
-    VelocityStatic.expandSequence = expandSequence;
-    /**
-     * Used to register a sequence. This should never be called by users
-     * directly, instead it should be called via an action:<br/>
-     * <code>Velocity("registerSequence", "name", VelocitySequence);</code>
-     *
-     * @private
-     */    function registerSequence(args) {
-        if (isPlainObject(args[0])) {
-            for (var name_3 in args[0]) {
-                registerSequence([ name_3, args[0][name_3] ]);
-            }
-        } else if (isString(args[0])) {
-            var name_4 = args[0], sequence = args[1];
-            if (!isString(name_4)) {
-                console.warn("VelocityJS: Trying to set 'registerSequence' name to an invalid value:", name_4);
-            } else if (!isPlainObject(sequence)) {
-                console.warn("VelocityJS: Trying to set 'registerSequence' sequence to an invalid value:", name_4, sequence);
-            } else {
-                if (VelocityStatic.Sequences[name_4]) {
-                    console.warn("VelocityJS: Replacing named sequence:", name_4);
-                }
-                var percents_1 = {}, steps_1 = new Array(100), properties = [], percentages = [], sequenceList = VelocityStatic.Sequences[name_4] = createEmptyObject(), duration = validateDuration(sequence.duration);
-                sequenceList.tweens = createEmptyObject();
-                if (isNumber(duration)) {
-                    sequenceList.duration = duration;
-                }
-                for (var part in sequence) {
-                    var keys = String(part).match(rxPercents);
-                    if (keys) {
-                        percentages.push(part);
-                        for (var _i = 0, keys_1 = keys; _i < keys_1.length; _i++) {
-                            var key = keys_1[_i];
-                            var percent = key === "from" ? 0 : key === "to" ? 100 : parseFloat(key);
-                            if (percent < 0 || percent > 100) {
-                                console.warn("VelocityJS: Trying to use an invalid value as a percentage (0 <= n <= 100):", name_4, percent);
-                            } else if (isNaN(percent)) {
-                                console.warn("VelocityJS: Trying to use an invalid number as a percentage:", name_4, part, key);
-                            } else {
-                                if (!percents_1[String(percent)]) {
-                                    percents_1[String(percent)] = [];
-                                }
-                                percents_1[String(percent)].push(part);
-                                for (var property in sequence[part]) {
-                                    if (!_inArray(properties, property)) {
-                                        properties.push(property);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                var orderedPercents = Object.keys(percents_1).sort(function(a, b) {
-                    var a1 = parseFloat(a), b1 = parseFloat(b);
-                    return a1 > b1 ? 1 : a1 < b1 ? -1 : 0;
-                });
-                orderedPercents.forEach(function(key) {
-                    steps_1.push.apply(percents_1[key]);
-                });
-                for (var _a = 0, properties_1 = properties; _a < properties_1.length; _a++) {
-                    var property = properties_1[_a];
-                    var parts = [], propertyName = VelocityStatic.CSS.camelCase(property);
-                    for (var _b = 0, orderedPercents_1 = orderedPercents; _b < orderedPercents_1.length; _b++) {
-                        var key = orderedPercents_1[_b];
-                        for (var _c = 0, _d = percents_1[key]; _c < _d.length; _c++) {
-                            var value = _d[_c];
-                            var properties_2 = sequence[value];
-                            if (properties_2[propertyName]) {
-                                parts.push(isString(properties_2[propertyName]) ? properties_2[propertyName] : properties_2[propertyName][0]);
-                            }
-                        }
-                    }
-                    if (parts.length) {
-                        var realSequence = VelocityStatic.findPattern(parts, propertyName);
-                        var index = 0;
-                        if (realSequence) {
-                            for (var _e = 0, orderedPercents_2 = orderedPercents; _e < orderedPercents_2.length; _e++) {
-                                var key = orderedPercents_2[_e];
-                                for (var _f = 0, _g = percents_1[key]; _f < _g.length; _f++) {
-                                    var value = _g[_f];
-                                    var originalProperty = sequence[value][propertyName];
-                                    if (originalProperty) {
-                                        if (Array.isArray(originalProperty) && originalProperty.length > 1 && (isString(originalProperty[1]) || Array.isArray(originalProperty[1]))) {
-                                            realSequence[index].easing = validateEasing(originalProperty[1], sequenceList.duration || DEFAULT_DURATION);
-                                        }
-                                        realSequence[index++].percent = parseFloat(key) / 100;
-                                    }
-                                }
-                            }
-                            sequenceList.tweens[propertyName] = realSequence;
-                        }
-                    }
-                }
-                //console.log("sequence", name, sequenceList)
-                        }
-        }
-    }
-    VelocityStatic.registerSequence = registerSequence;
-    VelocityStatic.registerAction([ "registerSequence", registerSequence ], true);
+    VelocityStatic.RunSequence = RunSequence;
 })(VelocityStatic || (VelocityStatic = {}));
 
 ///<reference path="state.ts" />
-///<reference path="easing/easings.ts" />
 /*
  * VelocityJS.org (C) 2014-2017 Julian Shapiro.
  *
@@ -3682,6 +3308,7 @@ var VelocityStatic;
             }, 1);
         }
     }
+    var firstProgress, firstComplete;
     function asyncCallbacks() {
         var activeCall, nextCall;
         // Callbacks and complete that might read the DOM again.
@@ -3699,7 +3326,7 @@ var VelocityStatic;
     }
     /**************
      Timing
-     **************/    var FRAME_TIME = 1e3 / 60, 
+     **************/    var FRAME_TIME = 1e3 / 60,
     /**
     * Shim for window.performance in case it doesn't exist
     */
@@ -3712,92 +3339,43 @@ var VelocityStatic;
             };
         }
         return perf;
-    }(), 
+    }(),
     /**
-     * Proxy function for when rAF is not available.
-     *
-     * This should hopefully never be used as the browsers often throttle
-     * this to less than one frame per second in the background, making it
-     * completely unusable.
+     * Proxy function for when rAF is not available - try to be as accurate
+     * as possible with the setTimeout calls, however they are far less
+     * accurate than rAF can be - so try not to use normally (unless the tab
+     * is in the background).
      */
     rAFProxy = function(callback) {
-        return setTimeout(callback, Math.max(0, FRAME_TIME - (performance.now() - VelocityStatic.lastTick)));
-    }, 
-    /**
-     * Either requestAnimationFrame, or a shim for it.
-     */
+        console.log("rAFProxy", Math.max(0, FRAME_TIME - (performance.now() - VelocityStatic.lastTick)), performance.now(), VelocityStatic.lastTick, FRAME_TIME);
+        return setTimeout(function() {
+            callback(performance.now());
+        }, Math.max(0, FRAME_TIME - (performance.now() - VelocityStatic.lastTick)));
+    },
+    /* rAF shim. Gist: https://gist.github.com/julianshapiro/9497513 */
     rAFShim = window.requestAnimationFrame || rAFProxy;
     /**
-     * Set if we are currently inside a tick() to prevent double-calling.
-     */    var ticking, 
-    /**
-     * A background WebWorker that sends us framerate messages when we're in
-     * the background. Without this we cannot maintain frame accuracy.
-     */
-    worker, 
-    /**
-     * The first animation with a Progress callback.
-     */
-    firstProgress, 
-    /**
-     * The first animation with a Complete callback.
-     */
-    firstComplete;
+     * The ticker function being used, either rAF, or a function that
+     * emulates it.
+     */    var ticker = document.hidden ? rAFProxy : rAFShim;
     /**
      * The time that the last animation frame ran at. Set from tick(), and used
      * for missing rAF (ie, when not in focus etc).
      */    VelocityStatic.lastTick = 0;
-    /**
-     * WebWorker background function.
-     *
-     * When we're in the background this will send us a msg every tick, when in
-     * the foreground it won't.
-     *
-     * When running in the background the browser reduces allowed CPU etc, so
-     * we raun at 30fps instead of 60fps.
-     */    function workerFn() {
-        var _this = this;
-        var interval;
-        this.onmessage = function(e) {
-            if (e.data === true) {
-                if (!interval) {
-                    interval = setInterval(function() {
-                        _this.postMessage(true);
-                    }, 1e3 / 30);
-                }
-            } else if (e.data === false) {
-                if (interval) {
-                    clearInterval(interval);
-                    interval = 0;
-                }
-            } else {
-                _this.postMessage(e.data);
+    /* Inactive browser tabs pause rAF, which results in all active animations immediately sprinting to their completion states when the tab refocuses.
+     To get around this, we dynamically switch rAF to setTimeout (which the browser *doesn't* pause) when the tab loses focus. We skip this for mobile
+     devices to avoid wasting battery power on inactive tabs. */
+    /* Note: Tab focus detection doesn't work on older versions of IE, but that's okay since they don't support rAF to begin with. */    if (!VelocityStatic.State.isMobile && document.hidden !== undefined) {
+        document.addEventListener("visibilitychange", function updateTicker(event) {
+            var hidden = document.hidden;
+            ticker = hidden ? rAFProxy : rAFShim;
+            if (event) {
+                setTimeout(tick, 2e3);
             }
-        };
+            tick();
+        });
     }
-    try {
-        // Create the worker - this might not be supported, hence the try/catch.
-        worker = new Worker(URL.createObjectURL(new Blob([ "(" + workerFn + ")()" ])));
-        // Whenever the worker sends a message we tick()
-                worker.onmessage = function(e) {
-            if (e.data === true) {
-                tick();
-            } else {
-                asyncCallbacks();
-            }
-        };
-        // And watch for going to the background to start the WebWorker running.
-                if (!VelocityStatic.State.isMobile && document.hidden !== undefined) {
-            document.addEventListener("visibilitychange", function() {
-                worker.postMessage(VelocityStatic.State.isTicking && document.hidden);
-            });
-        }
-    } catch (e) {
-        /*
-         * WebWorkers are not supported in this format. This can happen in IE10
-         * where it can't create one from a blob this way. We fallback, but make
-         * no guarantees towards accuracy in this case.
-         */}
+    var ticking;
     /**
      * Called on every tick, preferably through rAF. This is reponsible for
      * initialising any new animations, then starting any that need starting.
@@ -3816,8 +3394,11 @@ var VelocityStatic;
          the browser's next tick sync time occurs, which results in the first elements subjected to Velocity
          calls being animated out of sync with any elements animated immediately thereafter. In short, we ignore
          the first RAF tick pass so that elements being immediately consecutively animated -- instead of simultaneously animated
-         by the same Velocity call -- are properly batched into the same initial RAF tick and consequently remain in sync thereafter. */        if (timestamp !== false) {
-            var timeCurrent = performance.now(), deltaTime = VelocityStatic.lastTick ? timeCurrent - VelocityStatic.lastTick : FRAME_TIME, defaultSpeed = VelocityStatic.defaults.speed, defaultEasing = VelocityStatic.defaults.easing, defaultDuration = VelocityStatic.defaults.duration;
+         by the same Velocity call -- are properly batched into the same initial RAF tick and consequently remain in sync thereafter. */        if (timestamp) {
+            /* We normally use RAF's high resolution timestamp but as it can be significantly offset when the browser is
+             under high stress we give the option for choppiness over allowing the browser to drop huge chunks of frames.
+             We use performance.now() and shim it if it doesn't exist for when the tab is hidden. */
+            var timeCurrent = timestamp && timestamp !== true ? timestamp : performance.now(), deltaTime = VelocityStatic.lastTick ? timeCurrent - VelocityStatic.lastTick : FRAME_TIME, defaultSpeed = VelocityStatic.defaults.speed, defaultEasing = VelocityStatic.defaults.easing, defaultDuration = VelocityStatic.defaults.duration;
             var activeCall = void 0, nextCall = void 0, lastProgress = void 0, lastComplete = void 0;
             firstProgress = null;
             firstComplete = null;
@@ -3937,77 +3518,45 @@ var VelocityStatic;
                     }
                     for (var property in tweens) {
                         // For every element, iterate through each property.
-                        var tween_5 = tweens[property], sequence = tween_5.sequence, pattern = sequence.pattern;
+                        var tween_3 = tweens[property], easing = tween_3.easing || activeEasing, pattern = tween_3.pattern;
                         var currentValue = "", i = 0;
                         if (pattern) {
-                            var easingComplete = (tween_5.easing || activeEasing)(percentComplete, 0, 1, property), best = 0;
-                            for (var i_2 = 0; i_2 < sequence.length - 1; i_2++) {
-                                if (sequence[i_2].percent < easingComplete) {
-                                    best = i_2;
-                                }
-                            }
-                            var tweenFrom = sequence[best], tweenTo = sequence[best + 1] || tweenFrom, tweenPercent = (percentComplete - tweenFrom.percent) / (tweenTo.percent - tweenFrom.percent), easing = tweenTo.easing || VelocityStatic.Easing.linearEasing;
-                            //console.log("tick", percentComplete, tweenPercent, best, tweenFrom, tweenTo, sequence)
-                                                        for (;i < pattern.length; i++) {
-                                var startValue = tweenFrom[i];
+                            for (;i < pattern.length; i++) {
+                                var startValue = tween_3.start[i];
                                 if (startValue == null) {
                                     currentValue += pattern[i];
                                 } else {
-                                    var endValue = tweenTo[i];
-                                    if (startValue === endValue) {
-                                        currentValue += startValue;
-                                    } else {
-                                        // All easings must deal with numbers except for our internal ones.
-                                        var result = easing(reverse ? 1 - tweenPercent : tweenPercent, startValue, endValue, property);
-                                        currentValue += pattern[i] === true ? Math.round(result) : result;
-                                    }
+                                    // All easings must deal with numbers except for
+                                    // our internal ones
+                                    var result = easing(reverse ? 1 - percentComplete : percentComplete, startValue, tween_3.end[i], property);
+                                    currentValue += pattern[i] === true ? Math.round(result) : result;
                                 }
                             }
                             if (property !== "tween") {
-                                if (percentComplete === 1 && _startsWith(currentValue, "calc(0 + ")) {
-                                    currentValue = currentValue.replace(/^calc\(0[^\d]* \+ ([^\(\)]+)\)$/, "$1");
-                                }
                                 // TODO: To solve an IE<=8 positioning bug, the unit type must be dropped when setting a property value of 0 - add normalisations to legacy
-                                                                VelocityStatic.CSS.setPropertyValue(activeCall.element, property, currentValue, tween_5.fn);
+                                VelocityStatic.CSS.setPropertyValue(activeCall.element, property, currentValue, tween_3.fn);
                             } else {
                                 // Skip the fake 'tween' property as that is only
                                 // passed into the progress callback.
                                 activeCall.tween = currentValue;
                             }
                         } else {
-                            console.warn("VelocityJS: Missing pattern:", property, JSON.stringify(tween_5[property]));
+                            console.warn("VelocityJS: Missing pattern:", property, JSON.stringify(tween_3[property]));
                             delete tweens[property];
                         }
                     }
                 }
                 if (firstProgress || firstComplete) {
-                    if (document.hidden) {
-                        asyncCallbacks();
-                    } else if (worker) {
-                        worker.postMessage("");
-                    } else {
-                        setTimeout(asyncCallbacks, 1);
-                    }
+                    setTimeout(asyncCallbacks, 1);
                 }
             }
         }
         if (VelocityStatic.State.first) {
             VelocityStatic.State.isTicking = true;
-            if (!document.hidden) {
-                rAFShim(tick);
-            } else if (!worker) {
-                rAFProxy(tick);
-            } else if (timestamp === false) {
-                // Make sure we turn on the messages.
-                worker.postMessage(true);
-            }
+            ticker(tick);
         } else {
             VelocityStatic.State.isTicking = false;
             VelocityStatic.lastTick = 0;
-            if (document.hidden && worker) {
-                // Make sure we turn off the messages.
-                worker.postMessage(false);
-            }
         }
         ticking = false;
     }
@@ -4031,6 +3580,334 @@ var VelocityStatic;
  *
  * Licensed under the MIT license. See LICENSE file in the project root for details.
  *
+ * Tweens
+ */
+var VelocityStatic;
+
+(function(VelocityStatic) {
+    var rxHex = /^#([A-f\d]{3}){1,2}$/i;
+    var commands = new Map();
+    commands.set("function", function(value, element, elements, elementArrayIndex, propertyName, tween) {
+        return value.call(element, elementArrayIndex, elements.length);
+    });
+    commands.set("number", function(value, element, elements, elementArrayIndex, propertyName, tween) {
+        return value + VelocityStatic.getNormalizationUnit(tween.fn);
+    });
+    commands.set("string", function(value, element, elements, elementArrayIndex, propertyName, tween) {
+        return VelocityStatic.CSS.fixColors(value);
+    });
+    commands.set("undefined", function(value, element, elements, elementArrayIndex, propertyName, tween) {
+        return VelocityStatic.CSS.fixColors(VelocityStatic.CSS.getPropertyValue(element, propertyName, tween.fn) || "");
+    });
+    /**
+     * Expand a VelocityProperty argument into a valid sparse Tween array. This
+     * pre-allocates the array as it is then the correct size and slightly
+     * faster to access.
+     */    function expandProperties(animation, properties) {
+        var tweens = animation.tweens = createEmptyObject(), elements = animation.elements, element = animation.element, elementArrayIndex = elements.indexOf(element), data = Data(element), queue = getValue(animation.queue, animation.options.queue), duration = getValue(animation.options.duration, VelocityStatic.defaults.duration);
+        for (var property in properties) {
+            var propertyName = VelocityStatic.CSS.camelCase(property);
+            var valueData = properties[property], fn = VelocityStatic.getNormalization(element, propertyName);
+            if (!fn && propertyName !== "tween") {
+                if (VelocityStatic.debug) {
+                    console.log("Skipping [" + property + "] due to a lack of browser support.");
+                }
+                continue;
+            }
+            if (valueData == null) {
+                if (VelocityStatic.debug) {
+                    console.log("Skipping [" + property + "] due to no value supplied.");
+                }
+                continue;
+            }
+            var tween_4 = tweens[propertyName] = createEmptyObject();
+            var endValue = void 0, startValue = void 0;
+            tween_4.fn = fn;
+            if (isFunction(valueData)) {
+                // If we have a function as the main argument then resolve
+                // it first, in case it returns an array that needs to be
+                // split.
+                valueData = valueData.call(element, elementArrayIndex, elements.length, elements);
+            }
+            if (Array.isArray(valueData)) {
+                // valueData is an array in the form of
+                // [ endValue, [, easing] [, startValue] ]
+                var arr1 = valueData[1], arr2 = valueData[2];
+                endValue = valueData[0];
+                if (isString(arr1) && (/^[\d-]/.test(arr1) || rxHex.test(arr1)) || isFunction(arr1) || isNumber(arr1)) {
+                    startValue = arr1;
+                } else if (isString(arr1) && VelocityStatic.Easing.Easings[arr1] || Array.isArray(arr1)) {
+                    tween_4.easing = arr1;
+                    startValue = arr2;
+                } else {
+                    startValue = arr1 || arr2;
+                }
+            } else {
+                endValue = valueData;
+            }
+            tween_4.end = commands.get(typeof endValue)(endValue, element, elements, elementArrayIndex, propertyName, tween_4);
+            if (startValue != null || (queue === false || data.queueList[queue] === undefined)) {
+                tween_4.start = commands.get(typeof startValue)(startValue, element, elements, elementArrayIndex, propertyName, tween_4);
+            }
+            explodeTween(propertyName, tween_4, duration, !!startValue);
+        }
+    }
+    VelocityStatic.expandProperties = expandProperties;
+    /**
+     * Convert a string-based tween with start and end strings, into a pattern
+     * based tween with arrays.
+     */    function explodeTween(propertyName, tween, duration, isForcefeed) {
+        var endValue = tween.end;
+        var startValue = tween.start;
+        if (!isString(endValue) || !isString(startValue)) {
+            return;
+        }
+        var runAgain = false;
+ // Can only be set once if the Start value doesn't match the End value and it's not forcefed
+                do {
+            runAgain = false;
+            var arrayStart = tween.start = [ null ], arrayEnd = tween.end = [ null ], pattern = tween.pattern = [ "" ];
+            var easing = tween.easing, indexStart = 0, // index in startValue
+            indexEnd = 0, // index in endValue
+            inCalc = 0, // Keep track of being inside a "calc()" so we don't duplicate it
+            inRGB = 0, // Keep track of being inside an RGB as we can't use fractional values
+            inRGBA = 0, // Keep track of being inside an RGBA as we must pass fractional for the alpha channel
+            isStringValue = void 0;
+            var _loop_2 = function() {
+                var charStart = startValue[indexStart], charEnd = endValue[indexEnd];
+                // If they're both numbers, then parse them as a whole
+                                if (TWEEN_NUMBER_REGEX.test(charStart) && TWEEN_NUMBER_REGEX.test(charEnd)) {
+                    var tempStart = charStart, // temporary character buffer
+                    tempEnd = charEnd, // temporary character buffer
+                    dotStart = ".", // Make sure we can only ever match a single dot in a decimal
+                    dotEnd = ".";
+ // Make sure we can only ever match a single dot in a decimal
+                                        while (++indexStart < startValue.length) {
+                        charStart = startValue[indexStart];
+                        if (charStart === dotStart) {
+                            dotStart = "..";
+ // Can never match two characters
+                                                } else if (!isNumberWhenParsed(charStart)) {
+                            break;
+                        }
+                        tempStart += charStart;
+                    }
+                    while (++indexEnd < endValue.length) {
+                        charEnd = endValue[indexEnd];
+                        if (charEnd === dotEnd) {
+                            dotEnd = "..";
+ // Can never match two characters
+                                                } else if (!isNumberWhenParsed(charEnd)) {
+                            break;
+                        }
+                        tempEnd += charEnd;
+                    }
+                    var unitStart = VelocityStatic.CSS.getUnit(startValue, indexStart), // temporary unit type
+                    unitEnd = VelocityStatic.CSS.getUnit(endValue, indexEnd);
+ // temporary unit type
+                                        indexStart += unitStart.length;
+                    indexEnd += unitEnd.length;
+                    if (unitEnd.length === 0) {
+                        // This order as it's most common for the user supplied
+                        // value to be a number.
+                        unitEnd = unitStart;
+                    } else if (unitStart.length === 0) {
+                        unitStart = unitEnd;
+                    }
+                    if (unitStart === unitEnd) {
+                        // Same units
+                        if (tempStart === tempEnd) {
+                            // Same numbers, so just copy over
+                            pattern[pattern.length - 1] += tempStart + unitStart;
+                        } else {
+                            pattern.push(inRGB ? true : false, unitStart);
+                            arrayStart.push(parseFloat(tempStart), null);
+                            arrayEnd.push(parseFloat(tempEnd), null);
+                        }
+                    } else {
+                        // Different units, so put into a "calc(from + to)" and
+                        // animate each side to/from zero. setPropertyValue will
+                        // look out for the final "calc(0 + " prefix and remove
+                        // it from the value when it finds it.
+                        pattern[pattern.length - 1] += inCalc ? "+ (" : "calc(";
+                        pattern.push(false, unitStart + " + ", false, unitEnd + ")");
+                        arrayStart.push(parseFloat(tempStart) || 0, null, 0, null);
+                        arrayEnd.push(0, null, parseFloat(tempEnd) || 0, null);
+                    }
+                } else if (charStart === charEnd) {
+                    pattern[pattern.length - 1] += charStart;
+                    indexStart++;
+                    indexEnd++;
+                    // Keep track of being inside a calc()
+                                        if (inCalc === 0 && charStart === "c" || inCalc === 1 && charStart === "a" || inCalc === 2 && charStart === "l" || inCalc === 3 && charStart === "c" || inCalc >= 4 && charStart === "(") {
+                        inCalc++;
+                    } else if (inCalc && inCalc < 5 || inCalc >= 4 && charStart === ")" && --inCalc < 5) {
+                        inCalc = 0;
+                    }
+                    // Keep track of being inside an rgb() / rgba()
+                    // The opacity must not be rounded.
+                                        if (inRGB === 0 && charStart === "r" || inRGB === 1 && charStart === "g" || inRGB === 2 && charStart === "b" || inRGB === 3 && charStart === "a" || inRGB >= 3 && charStart === "(") {
+                        if (inRGB === 3 && charStart === "a") {
+                            inRGBA = 1;
+                        }
+                        inRGB++;
+                    } else if (inRGBA && charStart === ",") {
+                        if (++inRGBA > 3) {
+                            inRGB = inRGBA = 0;
+                        }
+                    } else if (inRGBA && inRGB < (inRGBA ? 5 : 4) || inRGB >= (inRGBA ? 4 : 3) && charStart === ")" && --inRGB < (inRGBA ? 5 : 4)) {
+                        inRGB = inRGBA = 0;
+                    }
+                } else if (charStart || charEnd) {
+                    // Different letters, so we're going to push them into start
+                    // and end until the next word
+                    isStringValue = true;
+                    if (!isString(arrayStart[arrayStart.length - 1])) {
+                        if (pattern.length === 1 && !pattern[0]) {
+                            arrayStart[0] = arrayEnd[0] = "";
+                        } else {
+                            pattern.push("");
+                            arrayStart.push("");
+                            arrayEnd.push("");
+                        }
+                    }
+                    while (indexStart < startValue.length) {
+                        charStart = startValue[indexStart++];
+                        if (charStart === " " || TWEEN_NUMBER_REGEX.test(charStart)) {
+                            break;
+                        } else {
+                            arrayStart[arrayStart.length - 1] += charStart;
+                        }
+                    }
+                    while (indexEnd < endValue.length) {
+                        charEnd = endValue[indexEnd++];
+                        if (charEnd === " " || TWEEN_NUMBER_REGEX.test(charEnd)) {
+                            break;
+                        } else {
+                            arrayEnd[arrayEnd.length - 1] += charEnd;
+                        }
+                    }
+                }
+                if (!isForcefeed && indexStart === startValue.length !== (indexEnd === endValue.length)) {
+                    // This little piece will take a startValue, split out the
+                    // various numbers in it, then copy the endValue into the
+                    // startValue while replacing the numbers in it to match the
+                    // original start numbers as a repeating sequence.
+                    // Finally this function will run again with the new
+                    // startValue and a now matching pattern.
+                    var startNumbers_1 = startValue.match(/\d\.?\d*/g) || [ "0" ], count_1 = startNumbers_1.length, index_1 = 0;
+                    startValue = endValue.replace(/\d+\.?\d*/g, function() {
+                        return startNumbers_1[index_1++ % count_1];
+                    });
+                    runAgain = isForcefeed = true;
+                    return "break";
+                }
+            };
+            // TODO: Relative Values
+            /* Operator logic must be performed last since it requires unit-normalized start and end values. */
+            /* Note: Relative *percent values* do not behave how most people think; while one would expect "+=50%"
+             to increase the property 1.5x its current value, it in fact increases the percent units in absolute terms:
+             50 points is added on top of the current % value. */
+            //					switch (operator as any as string) {
+            //						case "+":
+            //							endValue = startValue + endValue;
+            //							break;
+            //
+            //						case "-":
+            //							endValue = startValue - endValue;
+            //							break;
+            //
+            //						case "*":
+            //							endValue = startValue * endValue;
+            //							break;
+            //
+            //						case "/":
+            //							endValue = startValue / endValue;
+            //							break;
+            //					}
+            // TODO: Leading from a calc value
+                        while (indexStart < startValue.length && indexEnd < endValue.length) {
+                var state_1 = _loop_2();
+                if (state_1 === "break") break;
+            }
+            if (!runAgain) {
+                // TODO: These two would be slightly better to not add the array indices in the first place
+                if (pattern[0] === "" && arrayEnd[0] == null) {
+                    pattern.shift();
+                    arrayStart.shift();
+                    arrayEnd.shift();
+                }
+                if (pattern[pattern.length] === "" && arrayEnd[arrayEnd.length] == null) {
+                    pattern.pop();
+                    arrayStart.pop();
+                    arrayEnd.pop();
+                }
+                if (indexStart < startValue.length || indexEnd < endValue.length) {
+                    // NOTE: We should never be able to reach this code unless a
+                    // bad forcefed value is supplied.
+                    console.error("Velocity: Trying to pattern match mis-matched strings " + propertyName + ':["' + endValue + '", "' + startValue + '"]');
+                }
+                if (VelocityStatic.debug) {
+                    console.log("Velocity: Pattern found:", pattern, " -> ", arrayStart, arrayEnd, "[" + startValue + "," + endValue + "]");
+                }
+                if (propertyName === "display") {
+                    if (!/^(at-start|at-end|during)$/.test(easing)) {
+                        easing = endValue === "none" ? "at-end" : "at-start";
+                    }
+                } else if (propertyName === "visibility") {
+                    if (!/^(at-start|at-end|during)$/.test(easing)) {
+                        easing = endValue === "hidden" ? "at-end" : "at-start";
+                    }
+                } else if (isStringValue && easing !== "at-start" && easing !== "during" && easing !== "at-end" && easing !== VelocityStatic.Easing.Easings["at-Start"] && easing !== VelocityStatic.Easing.Easings["during"] && easing !== VelocityStatic.Easing.Easings["at-end"]) {
+                    console.warn("Velocity: String easings must use one of 'at-start', 'during' or 'at-end': {" + propertyName + ': ["' + endValue + '", ' + easing + ', "' + startValue + '"]}');
+                    easing = "at-start";
+                }
+                tween.easing = validateEasing(easing, duration);
+            }
+            // This can only run a second time once - if going from automatic startValue to "fixed" pattern from endValue with startValue numbers
+                } while (runAgain);
+    }
+    /**
+     * Expand all queued animations that haven't gone yet
+     *
+     * This will automatically expand the properties map for any recently added
+     * animations so that the start and end values are correct.
+     */    function validateTweens(activeCall) {
+        // This might be called on an already-ready animation
+        if (VelocityStatic.State.firstNew === activeCall) {
+            VelocityStatic.State.firstNew = activeCall._next;
+        }
+        // Check if we're actually already ready
+                if (activeCall._flags & 1 /* EXPANDED */) {
+            return;
+        }
+        var element = activeCall.element, tweens = activeCall.tweens, duration = getValue(activeCall.options.duration, VelocityStatic.defaults.duration);
+        for (var propertyName in tweens) {
+            var tween_5 = tweens[propertyName];
+            if (tween_5.start == null) {
+                // Get the start value as it's not been passed in
+                var startValue = VelocityStatic.CSS.getPropertyValue(activeCall.element, propertyName);
+                if (isString(startValue)) {
+                    tween_5.start = VelocityStatic.CSS.fixColors(startValue);
+                    explodeTween(propertyName, tween_5, duration);
+                } else if (!Array.isArray(startValue)) {
+                    console.warn("bad type", tween_5, propertyName, startValue);
+                }
+            }
+            if (VelocityStatic.debug) {
+                console.log("tweensContainer (" + propertyName + "): " + JSON.stringify(tween_5), element);
+            }
+        }
+        activeCall._flags |= 1 /* EXPANDED */;
+    }
+    VelocityStatic.validateTweens = validateTweens;
+})(VelocityStatic || (VelocityStatic = {}));
+
+/*
+ * VelocityJS.org (C) 2014-2017 Julian Shapiro.
+ *
+ * Licensed under the MIT license. See LICENSE file in the project root for details.
+ *
  * Validation functions used for various types of data that can be supplied.
  * All errors are reported in the non-minified version for development. If a
  * validation fails then it should return <code>undefined</code>.
@@ -4038,8 +3915,7 @@ var VelocityStatic;
 /**
  * Parse a duration value and return an ms number. Optionally return a
  * default value if the number is not valid.
- */
-function parseDuration(duration, def) {
+ */ function parseDuration(duration, def) {
     if (isNumber(duration)) {
         return duration;
     }
@@ -4297,19 +4173,19 @@ function VelocityFn() {
     for (var _i = 0; _i < arguments.length; _i++) {
         __args[_i] = arguments[_i];
     }
-    var 
+    var
     /**
      * A shortcut to the default options.
      */
-    defaults = VelocityStatic.defaults, 
+    defaults = VelocityStatic.defaults,
     /**
      * Shortcut to arguments for file size.
      */
-    _arguments = arguments, 
+    _arguments = arguments,
     /**
      * Cache of the first argument - this is used often enough to be saved.
      */
-    args0 = _arguments[0], 
+    args0 = _arguments[0],
     /**
      * To allow for expressive CoffeeScript code, Velocity supports an
      * alternative syntax in which "elements" (or "e"), "properties" (or
@@ -4322,17 +4198,17 @@ function VelocityFn() {
      */
     // TODO: Confirm which browsers - if <=IE8 the we can drop completely
     syntacticSugar = isPlainObject(args0) && (args0.p || (isPlainObject(args0.properties) && !args0.properties.names || isString(args0.properties)));
-    var 
+    var
     /**
      *  When Velocity is called via the utility function (Velocity()),
      * elements are explicitly passed in as the first parameter. Thus,
      * argument positioning varies.
      */
-    argumentIndex = 0, 
+    argumentIndex = 0,
     /**
      * The list of elements, extended with Promise and Velocity.
      */
-    elements, 
+    elements,
     /**
      * The properties being animated. This can be a string, in which case it
      * is either a function for these elements, or it is a "named" animation
@@ -4341,24 +4217,24 @@ function VelocityFn() {
      * after finishing. When used as a transtition then there is no special
      * handling after finishing.
      */
-    propertiesMap, 
+    propertiesMap,
     /**
      * Options supplied, this will be mapped and validated into
      * <code>options</code>.
      */
-    optionsMap, 
+    optionsMap,
     /**
      * If called via a chain then this contains the <b>last</b> calls
      * animations. If this does not have a value then any access to the
      * element's animations needs to be to the currently-running ones.
      */
-    animations, 
+    animations,
     /**
      * The promise that is returned.
      */
-    promise, 
+    promise,
     // Used when the animation is finished
-    resolver, 
+    resolver,
     // Used when there was an issue with one or more of the Velocity arguments
     rejecter;
     //console.log("Velocity", _arguments)
@@ -4372,18 +4248,18 @@ function VelocityFn() {
     } else if (isWrapped(this)) {
         // This might be a chain from something else, but if chained from a
         // previous Velocity() call then grab the animations it's related to.
-        elements = _objectAssign([], this);
+        elements = Object.assign([], this);
         if (isVelocityResult(this)) {
             animations = this.velocity.animations;
         }
     } else if (syntacticSugar) {
-        elements = _objectAssign([], args0.elements || args0.e);
+        elements = Object.assign([], args0.elements || args0.e);
         argumentIndex++;
     } else if (isNode(args0)) {
-        elements = _objectAssign([], [ args0 ]);
+        elements = Object.assign([], [ args0 ]);
         argumentIndex++;
     } else if (isWrapped(args0)) {
-        elements = _objectAssign([], args0);
+        elements = Object.assign([], args0);
         argumentIndex++;
     }
     // Allow elements to be chained.
@@ -4402,7 +4278,7 @@ function VelocityFn() {
     }
     // Get any options map passed in as arguments first, expand any direct
     // options if possible.
-        var isReverse = propertiesMap === "reverse", isAction = !isReverse && isString(propertiesMap), maybeSequence = isAction && VelocityStatic.Sequences[propertiesMap], opts = syntacticSugar ? getValue(args0.options, args0.o) : _arguments[argumentIndex];
+        var isReverse = propertiesMap === "reverse", isAction = !isReverse && isString(propertiesMap), opts = syntacticSugar ? getValue(args0.options, args0.o) : _arguments[argumentIndex];
     if (isPlainObject(opts)) {
         optionsMap = opts;
     }
@@ -4424,15 +4300,18 @@ function VelocityFn() {
                         args.then = undefined;
  // Preserving enumeration etc
                                         }
-                    _resolve(args);
-                    if (_then) {
-                        args.then = _then;
-                    }
+                    _resolve(args, _then);
                 } else {
                     _resolve(args);
                 }
             };
         });
+		promise = promise.then(function(args, _then) {
+			if (_then) {
+				args.then = _then
+			}
+			return args
+		})
         if (elements) {
             defineProperty(elements, "then", promise.then.bind(promise));
             defineProperty(elements, "catch", promise.catch.bind(promise));
@@ -4478,20 +4357,16 @@ function VelocityFn() {
         // There is one special case - "reverse" - which is handled differently,
         // by being stored on the animation and then expanded when the animation
         // starts.
-                var action = propertiesMap.replace(/\..*$/, ""), callback = VelocityStatic.Actions[action];
+                var action = propertiesMap.replace(/\..*$/, ""), callback = VelocityStatic.Actions[action] || VelocityStatic.Actions["default"];
         if (callback) {
             var result = callback(args, elements, promiseHandler, propertiesMap);
             if (result !== undefined) {
                 return result;
             }
-            return elements || promise;
-        } else if (!maybeSequence) {
-            console.error("VelocityJS: First argument (" + propertiesMap + ") was not a property map, a known action, or a registered redirect. Aborting.");
-            return;
+        } else {
+            console.warn("VelocityJS: Unknown action:", propertiesMap);
         }
-    }
-    var hasValidDuration;
-    if (isPlainObject(propertiesMap) || isReverse || maybeSequence) {
+    } else if (isPlainObject(propertiesMap) || isReverse) {
         /**
          * The options for this set of animations.
          */
@@ -4510,9 +4385,7 @@ function VelocityFn() {
         defineProperty(options, "_total", 0);
         // Now check the optionsMap
                 if (isPlainObject(optionsMap)) {
-            var validDuration = validateDuration(optionsMap.duration);
-            hasValidDuration = validDuration !== undefined;
-            options.duration = getValue(validDuration, defaults.duration);
+            options.duration = getValue(validateDuration(optionsMap.duration), defaults.duration);
             options.delay = getValue(validateDelay(optionsMap.delay), defaults.delay);
             // Need the extra fallback here in case it supplies an invalid
             // easing that we need to overrride with the default.
@@ -4559,12 +4432,11 @@ function VelocityFn() {
             }
         } else if (!syntacticSugar) {
             // Expand any direct options if possible.
-            var validDuration = validateDuration(_arguments[argumentIndex], true);
+            var duration = validateDuration(_arguments[argumentIndex], true);
             var offset = 0;
-            hasValidDuration = validDuration !== undefined;
-            if (validDuration !== undefined) {
+            if (duration !== undefined) {
                 offset++;
-                options.duration = validDuration;
+                options.duration = duration;
             }
             if (!isFunction(_arguments[argumentIndex + offset])) {
                 // Despite coming before Complete, we can't pass a fn easing
@@ -4583,9 +4455,6 @@ function VelocityFn() {
         }
         if (isReverse && options.queue === false) {
             throw new Error("VelocityJS: Cannot reverse a queue:false animation.");
-        }
-        if (maybeSequence && !hasValidDuration && maybeSequence.duration) {
-            options.duration = maybeSequence.duration;
         }
         /* When a set of elements is targeted by a Velocity call, the set is broken up and each element has the current Velocity call individually queued onto it.
          In this way, each element's existing queue is respected; some elements may already be animating and accordingly should not have this current Velocity call triggered immediately. */
@@ -4615,20 +4484,18 @@ function VelocityFn() {
                     }
                     flags |= 64 /* REVERSE */ & ~(lastAnimation._flags & 64 /* REVERSE */);
                 }
-                var animation = _objectAssign({
-                    element: element
+                var tweens = createEmptyObject(), animation = Object.assign({
+                    element: element,
+                    tweens: tweens
                 }, rootAnimation);
                 options._total++;
                 animation._flags |= flags;
                 animations.push(animation);
-                if (maybeSequence) {
-                    VelocityStatic.expandSequence(animation, maybeSequence);
-                } else if (isReverse) {
+                if (isReverse) {
                     // In this case we're using the previous animation, so
                     // it will be expanded correctly when that one runs.
                     animation.tweens = propertiesMap;
                 } else {
-                    animation.tweens = createEmptyObject();
                     VelocityStatic.expandProperties(animation, propertiesMap);
                 }
                 VelocityStatic.queue(element, animation, options.queue);
@@ -4637,7 +4504,7 @@ function VelocityFn() {
         if (VelocityStatic.State.isTicking === false) {
             // If the animation tick isn't running, start it. (Velocity shuts it
             // off when there are no active calls to process.)
-            VelocityStatic.tick(false);
+            VelocityStatic.tick();
         }
         if (animations) {
             defineProperty(elements.velocity, "animations", animations);
@@ -4715,2303 +4582,7 @@ if (window === this) {
  ******************/
 /* The CSS spec mandates that the translateX/Y/Z transforms are %-relative to the element itself -- not its parent.
  Velocity, however, doesn't make this distinction. Thus, converting to or from the % unit with these subproperties
- will produce an inaccurate conversion value. The same issue exists with the cx/cy attributes of SVG circles and ellipses. */
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */ var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "bounce", {
-            duration: 1e3,
-            "0,100%": {
-                transformOrigin: "center bottom"
-            },
-            "0%,20%,53%,80%,100%": {
-                transform: [ "translate3d(0,0px,0)", "easeOutCubic" ]
-            },
-            "40%,43%": {
-                transform: [ "translate3d(0,-30px,0)", "easeInQuint" ]
-            },
-            "70%": {
-                transform: [ "translate3d(0,-15px,0)", "easeInQuint" ]
-            },
-            "90%": {
-                transform: "translate3d(0,-4px,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "flash", {
-            duration: 1e3,
-            "0%,50%,100%": {
-                opacity: "1"
-            },
-            "25%,75%": {
-                opacity: "0"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "headShake", {
-            duration: 1e3,
-            easing: "easeInOut",
-            "0%": {
-                transform: "translateX(0) rotateY(0)"
-            },
-            "6.5%": {
-                transform: "translateX(-6px) rotateY(-9deg)"
-            },
-            "18.5%": {
-                transform: "translateX(5px) rotateY(7deg)"
-            },
-            "31.5%": {
-                transform: "translateX(-3px) rotateY(-5deg)"
-            },
-            "43.5%": {
-                transform: "translateX(2px) rotateY(3deg)"
-            },
-            "50%": {
-                transform: "translateX(0) rotateY(0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "jello", {
-            duration: 1e3,
-            "0%,100%": {
-                transformOrigin: "center"
-            },
-            "0%,11.1%,100%": {
-                transform: "skewX(0) skewY(0)"
-            },
-            "22.2%": {
-                transform: "skewX(-12.5deg) skewY(-12.5deg)"
-            },
-            "33.3%": {
-                transform: "skewX(6.25deg) skewY(6.25deg)"
-            },
-            "44.4%": {
-                transform: "skewX(-3.125deg) skewY(-3.125deg)"
-            },
-            "55.5%": {
-                transform: "skewX(1.5625deg) skewY(1.5625deg)"
-            },
-            "66.6%": {
-                transform: "skewX(-0.78125deg) skewY(-0.78125deg)"
-            },
-            "77.7%": {
-                transform: "skewX(0.390625deg) skewY(0.390625deg)"
-            },
-            "88.8%": {
-                transform: "skewX(-0.1953125deg) skewY(-0.1953125deg)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "pulse", {
-            duration: 1e3,
-            "0%": {
-                transform: "scale3d(1,1,1)"
-            },
-            "50%": {
-                transform: "scale3d(1.05,1.05,1.05)"
-            },
-            "100%": {
-                transform: "scale3d(1,1,1)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "rubberBand", {
-            duration: 1e3,
-            "0%": {
-                transform: "scale3d(1,1,1)"
-            },
-            "30%": {
-                transform: "scale3d(1.25,0.75,1)"
-            },
-            "40%": {
-                transform: "scale3d(0.75,1.25,1)"
-            },
-            "50%": {
-                transform: "scale3d(1.15,0.85,1)"
-            },
-            "65%": {
-                transform: "scale3d(0.95,1.05,1)"
-            },
-            "75%": {
-                transform: "scale3d(1.05,0.95,1)"
-            },
-            "100%": {
-                transform: "scale3d(1,1,1)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "shake", {
-            duration: 1e3,
-            "0%,100%": {
-                transform: "translate3d(0,0,0)"
-            },
-            "10%,30%,50%,70%,90%": {
-                transform: "translate3d(-10px,0,0)"
-            },
-            "20%,40%,60%,80%": {
-                transform: "translate3d(10px,0,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "swing", {
-            duration: 1e3,
-            "0%,100%": {
-                transform: "rotate3d(0,0,1,0deg)",
-                transformOrigin: "center"
-            },
-            "20%": {
-                transform: "rotate3d(0,0,1,15deg)"
-            },
-            "40%": {
-                transform: "rotate3d(0,0,1,-10deg)"
-            },
-            "60%": {
-                transform: "rotate3d(0,0,1,5deg)"
-            },
-            "80%": {
-                transform: "rotate3d(0,0,1,-5deg)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "tada", {
-            duration: 1e3,
-            "0%": {
-                transform: "scale3d(1,1,1) rotate3d(0,0,0,0)"
-            },
-            "10%,20%": {
-                transform: "scale3d(0.9,0.9,0.9) rotate3d(0,0,1,-3deg)"
-            },
-            "30%,50%,70%,90%": {
-                transform: "scale3d(1.1,1.1,1.1) rotate3d(0,0,1,3deg)"
-            },
-            "40%,60%,80%": {
-                transform: "scale3d(1.1,1.1,1.1) rotate3d(0,0,1,-3deg)"
-            },
-            "100%": {
-                transform: "scale3d(1, 1, 1) rotate3d(0,0,0,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "wobble", {
-            duration: 1e3,
-            "0%": {
-                transform: "translate3d(0,0,0) rotate3d(0,0,0,0)"
-            },
-            "15%": {
-                transform: "translate3d(-25%,0,0) rotate3d(0,0,1,-5deg)"
-            },
-            "30%": {
-                transform: "translate3d(20%,0,0) rotate3d(0,0,1,3deg)"
-            },
-            "45%": {
-                transform: "translate3d(-15%,0,0) rotate3d(0,0,1,-3deg)"
-            },
-            "60%": {
-                transform: "translate3d(10%,0,0) rotate3d(0,0,1,2deg)"
-            },
-            "75%": {
-                transform: "translate3d(-5%,0,0) rotate3d(0,0,1,-1deg)"
-            },
-            "100%": {
-                transform: "translate3d(0,0,0) rotate3d(0,0,0,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "bounceIn", {
-            duration: 750,
-            easing: "easeOutCubic",
-            "0%": {
-                opacity: "0",
-                transform: "scale3d(0.3,0.3,0.3)"
-            },
-            "20%": {
-                transform: "scale3d(1.1,1.1,1.1)"
-            },
-            "40%": {
-                transform: "scale3d(0.9,0.9,0.9)"
-            },
-            "60%": {
-                opacity: "1",
-                transform: "scale3d(1.03,1.03,1.03)"
-            },
-            "80%": {
-                transform: "scale3d(0.97,0.97,0.97)"
-            },
-            "100%": {
-                opacity: "1",
-                transform: "scale3d(1,1,1)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "bounceInDown", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "translate3d(0,-3000px,0)"
-            },
-            "60%": {
-                opacity: "1",
-                transform: [ "translate3d(0,25px,0)", "easeOutCubic" ]
-            },
-            "75%": {
-                transform: [ "translate3d(0,-10px,0)", "easeOutCubic" ]
-            },
-            "90%": {
-                transform: [ "translate3d(0,5px,0)", "easeOutCubic" ]
-            },
-            "100%": {
-                transform: [ "translate3d(0,0,0)", "easeOutCubic" ]
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "bounceInLeft", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "translate3d(-3000px,0,0)"
-            },
-            "60%": {
-                opacity: "1",
-                transform: [ "translate3d(25px,0,0)", "easeOutCubic" ]
-            },
-            "75%": {
-                transform: [ "translate3d(-10px,0,0)", "easeOutCubic" ]
-            },
-            "90%": {
-                transform: [ "translate3d(5px,0,0)", "easeOutCubic" ]
-            },
-            "100%": {
-                transform: [ "translate3d(0,0,0)", "easeOutCubic" ]
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "bounceInRight", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "translate3d(3000px,0,0)"
-            },
-            "60%": {
-                opacity: "1",
-                transform: [ "translate3d(-25px,0,0)", "easeOutCubic" ]
-            },
-            "75%": {
-                transform: [ "translate3d(10px,0,0)", "easeOutCubic" ]
-            },
-            "90%": {
-                transform: [ "translate3d(-5px,0,0)", "easeOutCubic" ]
-            },
-            "100%": {
-                transform: [ "translate3d(0,0,0)", "easeOutCubic" ]
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "bounceInUp", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "translate3d(0,3000px,0)"
-            },
-            "60%": {
-                opacity: "1",
-                transform: [ "translate3d(0,-25px,0)", "easeOutCubic" ]
-            },
-            "75%": {
-                transform: [ "translate3d(0,10px,0)", "easeOutCubic" ]
-            },
-            "90%": {
-                transform: [ "translate3d(0,-5px,0)", "easeOutCubic" ]
-            },
-            "100%": {
-                transform: [ "translate3d(0,0,0)", "easeOutCubic" ]
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "bounceOut", {
-            duration: 750,
-            "0%": {
-                opacity: "1",
-                transform: "scale3d(1,1,1)"
-            },
-            "20%": {
-                transform: "scale3d(0.9,0.9,0.9)"
-            },
-            "50%,55%": {
-                opacity: "1",
-                transform: "scale3d(1.1,1.1,1.1)"
-            },
-            to: {
-                opacity: "0",
-                transform: "scale3d(0.3,0.3,0.3)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "bounceOutDown", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)"
-            },
-            "20%": {
-                transform: "translate3d(0,10px,0)"
-            },
-            "40%,45%": {
-                opacity: "1",
-                transform: "translate3d(0,-20px,0)"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "translate3d(0,2000px,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "bounceOutLeft", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)"
-            },
-            "20%": {
-                opacity: "1",
-                transform: "translate3d(20px,0,0)"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "translate3d(-2000px,0,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "bounceOutRight", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)"
-            },
-            "20%": {
-                opacity: "1",
-                transform: "translate3d(-20px,0,0)"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "translate3d(2000px,0,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "bounceOutUp", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)"
-            },
-            "20%": {
-                transform: "translate3d(0,-10px,0)"
-            },
-            "40%,45%": {
-                opacity: "1",
-                transform: "translate3d(0,20px,0)"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "translate3d(0,-2000px,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "fadeIn", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0"
-            },
-            "100%": {
-                opacity: "1"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "fadeInDown", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "translate3d(0,-100%,0)"
-            },
-            "100%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "fadeInDownBig", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "translate3d(0,-2000px,0)"
-            },
-            "100%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "fadeInLeft", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "translate3d(-100%,0,0)"
-            },
-            "100%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "fadeInLeftBig", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "translate3d(-2000px,0,0)"
-            },
-            "100%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "fadeInRight", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "translate3d(100%,0,0)"
-            },
-            "100%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "fadeInRightBig", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "translate3d(2000px,0,0)"
-            },
-            "100%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "fadeInUp", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "translate3d(0,100%,0)"
-            },
-            "100%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "fadeInUpBig", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "translate3d(0,2000px,0)"
-            },
-            "100%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "fadeOut", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1"
-            },
-            "100%": {
-                opacity: "0"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "fadeOutDown", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "translate3d(0,100%,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "fadeOutDownBig", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "translate3d(0,2000px,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "fadeOutLeft", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "translate3d(-100%,0,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "fadeOutLeftBig", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "translate3d(-2000px,0,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "fadeOutRight", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "translate3d(100%,0,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "fadeOutRightBig", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "translate3d(2000px,0,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "fadeOutUp", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "translate3d(0,-100%,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "fadeOutUpBig", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "translate3d(0,-2000px,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "flip", {
-            duration: 1e3,
-            "0%,100%": {
-                backfaceVisibility: "visible"
-            },
-            "0%": {
-                transform: [ "perspective(400px) translate3d(0,0,0) rotate3d(0,1,0,-360deg) scale3d(1,1,1)", "easeOut" ]
-            },
-            "40%": {
-                transform: [ "perspective(400px) translate3d(0,0,150px) rotate3d(0,1,0,-190deg) scale3d(1,1,1)", "easeOut" ]
-            },
-            "50%": {
-                transform: [ "perspective(400px) translate3d(0,0,150px) rotate3d(0,1,0,-170deg) scale3d(1,1,1)", "easeIn" ]
-            },
-            "80%": {
-                transform: [ "perspective(400px) translate3d(0,0,0) rotate3d(0,1,0,0) scale3d(0.95,0.95,0.95)", "easeIn" ]
-            },
-            "100%": {
-                transform: [ "perspective(400px) translate3d(0,0,0) rotate3d(0,0,0,0) scale3d(1,1,1)", "ease-in" ]
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "flipInX", {
-            duration: 1e3,
-            "0%,100%": {
-                backfaceVisibility: "visible"
-            },
-            "0%": {
-                opacity: "0",
-                transform: "perspective(400px) rotate3d(1,0,0,90deg)"
-            },
-            "40%": {
-                transform: [ "perspective(400px) rotate3d(1,0,0,-20deg)", "easeIn" ]
-            },
-            "60%": {
-                opacity: "1",
-                transform: "perspective(400px) rotate3d(1,0,0,10deg)"
-            },
-            "80%": {
-                transform: "perspective(400px) rotate3d(1,0,0,-5deg)"
-            },
-            "100%": {
-                transform: "perspective(400px) rotate3d(1,0,0,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "flipInY", {
-            duration: 1e3,
-            "0%,100%": {
-                backfaceVisibility: "visible"
-            },
-            "0%": {
-                opacity: "0",
-                transform: "perspective(400px) rotate3d(0,1,0,90deg)"
-            },
-            "40%": {
-                transform: [ "perspective(400px) rotate3d(0,1,0,-20deg)", "easeIn" ]
-            },
-            "60%": {
-                opacity: "1",
-                transform: "perspective(400px) rotate3d(0,1,0,10deg)"
-            },
-            "80%": {
-                transform: "perspective(400px) rotate3d(0,1,0,-5deg)"
-            },
-            "100%": {
-                transform: "perspective(400px) rotate3d(0,1,0,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "flipOutX", {
-            duration: 750,
-            "0%,100%": {
-                backfaceVisibility: "visible"
-            },
-            "0%": {
-                transform: "perspective(400px) rotate3d(1,0,0,0)"
-            },
-            "30%": {
-                opacity: "1",
-                transform: "perspective(400px) rotate3d(1,0,0,-20deg)"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "perspective(400px) rotate3d(1,0,0,90deg)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "flipOutY", {
-            duration: 750,
-            "0%,100%": {
-                backfaceVisibility: "visible"
-            },
-            "0%": {
-                transform: "perspective(400px) rotate3d(0,1,0,0)"
-            },
-            "30%": {
-                opacity: "1",
-                transform: "perspective(400px) rotate3d(0,1,0,-20deg)"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "perspective(400px) rotate3d(0,1,0,90deg)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "lightSpeedIn", {
-            duration: 1e3,
-            easing: "easeOut",
-            "0%": {
-                opacity: "0",
-                transform: "translate3d(100%,0,0) skewX(-30deg)"
-            },
-            "60%": {
-                opacity: "1",
-                transform: "translate3d(40%,0,0) skewX(20deg)"
-            },
-            "80%": {
-                opacity: "1",
-                transform: "translate3d(20%,0,0) skewX(-5deg)"
-            },
-            "100%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0) skew(0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "lightSpeedOut", {
-            duration: 1e3,
-            easing: "easeIn",
-            "0%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0) skewX(0)"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "translate3d(100%,0,0) skewX(30deg)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "rotateIn", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "rotate3d(0,0,1,-200deg)",
-                transformOrigin: "center"
-            },
-            "100%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)",
-                transformOrigin: "center"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "rotateInDownLeft", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "rotate3d(0,0,1,-45deg)",
-                transformOrigin: "left bottom"
-            },
-            "100%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)",
-                transformOrigin: "left bottom"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "rotateInDownRight", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "rotate3d(0,0,1,45deg)",
-                transformOrigin: "right bottom"
-            },
-            "100%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)",
-                transformOrigin: "right bottom"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "rotateInUpLeft", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "rotate3d(0,0,1,45deg)",
-                transformOrigin: "left bottom"
-            },
-            "100%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)",
-                transformOrigin: "left bottom"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "rotateInUpRight", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "rotate3d(0,0,1,-90deg)",
-                transformOrigin: "right bottom"
-            },
-            "100%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)",
-                transformOrigin: "right bottom"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "rotateOut", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)",
-                transformOrigin: "center"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "rotate3d(0,0,1,200deg)",
-                transformOrigin: "center"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "rotateOutDownLeft", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)",
-                transformOrigin: "left bottom"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "rotate3d(0,0,1,45deg)",
-                transformOrigin: "left bottom"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "rotateOutDownRight", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)",
-                transformOrigin: "right bottom"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "rotate3d(0,0,1,-45deg)",
-                transformOrigin: "right bottom"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "rotateOutUpLeft", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)",
-                transformOrigin: "left bottom"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "rotate3d(0,0,1,-45deg)",
-                transformOrigin: "left bottom"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "rotateOutUpRight", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0)",
-                transformOrigin: "right bottom"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "rotate3d(0,0,1,90deg)",
-                transformOrigin: "right bottom"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "slideInDown", {
-            duration: 1e3,
-            "0%": {
-                transform: "translate3d(0,-100%,0)",
-                visibility: "hidden",
-                opacity: "0"
-            },
-            "100%": {
-                transform: "translate3d(0,0,0)",
-                visibility: "visible",
-                opacity: "1"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "slideInLeft", {
-            duration: 1e3,
-            "0%": {
-                transform: "translate3d(-100%,0,0)",
-                visibility: "hidden",
-                opacity: "0"
-            },
-            "100%": {
-                transform: "translate3d(0,0,0)",
-                visibility: "visible",
-                opacity: "1"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "slideInRight", {
-            duration: 1e3,
-            "0%": {
-                transform: "translate3d(100%,0,0)",
-                visibility: "hidden",
-                opacity: "0"
-            },
-            "100%": {
-                transform: "translate3d(0,0,0)",
-                visibility: "visible",
-                opacity: "1"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "slideInUp", {
-            duration: 1e3,
-            "0%": {
-                transform: "translate3d(0,100%,0)",
-                visibility: "hidden",
-                opacity: "0"
-            },
-            "100%": {
-                transform: "translate3d(0,0,0)",
-                visibility: "visible",
-                opacity: "1"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "slideOutDown", {
-            duration: 1e3,
-            "0%": {
-                transform: "translate3d(0,0,0)",
-                visibility: "visible",
-                opacity: "1"
-            },
-            "100%": {
-                transform: "translate3d(0,-100%,0)",
-                visibility: "hidden",
-                opacity: "0"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "slideOutLeft", {
-            duration: 1e3,
-            "0%": {
-                transform: "translate3d(0,0,0)",
-                visibility: "visible",
-                opacity: "1"
-            },
-            "100%": {
-                transform: "translate3d(-100%,0,0)",
-                visibility: "hidden",
-                opacity: "0"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "slideOutRight", {
-            duration: 1e3,
-            "0%": {
-                transform: "translate3d(0,0,0)",
-                visibility: "visible",
-                opacity: "1"
-            },
-            "100%": {
-                transform: "translate3d(100%,0,0)",
-                visibility: "hidden",
-                opacity: "0"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "slideOutUp", {
-            duration: 1e3,
-            "0%": {
-                transform: "translate3d(0,0,0)",
-                visibility: "visible",
-                opacity: "1"
-            },
-            "100%": {
-                transform: "translate3d(0,100%,0)",
-                visibility: "hidden",
-                opacity: "0"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "hinge", {
-            duration: 2e3,
-            "0%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0) rotate3d(0,0,1,0)",
-                transformOrigin: "top left"
-            },
-            "20%,60%": {
-                transform: [ "translate3d(0,0,0) rotate3d(0,0,1,80deg)", "easeInOut" ]
-            },
-            "40%,80%": {
-                opacity: "1",
-                transform: [ "translate3d(0,0,0) rotate3d(0,0,1,60deg)", "easeInOut" ]
-            },
-            "100%": {
-                opacity: "0",
-                transform: [ "translate3d(0,700px,0) rotate3d(0,0,1,80deg)", "easeInOut" ]
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "jackInTheBox", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "scale(0.1) rotate(30deg)",
-                transformOrigin: "center bottom"
-            },
-            "50%": {
-                transform: "scale(0.5) rotate(-10deg)"
-            },
-            "70%": {
-                transform: "scale(0.7) rotate(3deg)"
-            },
-            "100%": {
-                opacity: "1",
-                transform: "scale(1) rotate(0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "rollIn", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "translate3d(-100%,0,0) rotate3d(0,0,1,-120deg)"
-            },
-            "100%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0) rotate3d(0,0,1,0)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "rollOut", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1",
-                transform: "translate3d(0,0,0) rotate3d(0,0,1,0)"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "translate3d(100%,0,0) rotate3d(0,0,1,120deg)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "zoomIn", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "scale3d(0.3,0.3,0.3)"
-            },
-            "50%": {
-                opacity: "1"
-            },
-            "100%": {
-                transform: "scale3d(1,1,1)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "zoomInDown", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "scale3d(0.1,0.1,0.1) translate3d(0,-1000px,0)"
-            },
-            "60%": {
-                opacity: "1",
-                transform: [ "scale3d(0.475,0.475,0.475) translate3d(0,60px,0)", "easeInCubic" ]
-            },
-            "100%": {
-                transform: [ "scale3d(1,1,1) translate3d(0,0,0)", [ .175, .885, .32, 1 ] ]
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "zoomInLeft", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "scale3d(0.1,0.1,0.1) translate3d(-1000px,0,0)"
-            },
-            "60%": {
-                opacity: "1",
-                transform: [ "scale3d(0.475,0.475,0.475) translate3d(10px,0,0)", "easeInCubic" ]
-            },
-            "100%": {
-                transform: [ "scale3d(1,1,1) translate3d(0,0,0)", [ .175, .885, .32, 1 ] ]
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "zoomInRight", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "scale3d(0.1,0.1,0.1) translate3d(1000px,0,0)"
-            },
-            "60%": {
-                opacity: "1",
-                transform: [ "scale3d(0.475,0.475,0.475) translate3d(-10px,0,0)", "easeInCubic" ]
-            },
-            "100%": {
-                transform: [ "scale3d(1,1,1) translate3d(0,0,0)", [ .175, .885, .32, 1 ] ]
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "zoomInUp", {
-            duration: 1e3,
-            "0%": {
-                opacity: "0",
-                transform: "scale3d(0.1,0.1,0.1) translate3d(0,1000px,0)"
-            },
-            "60%": {
-                opacity: "1",
-                transform: [ "scale3d(0.475,0.475,0.475) translate3d(0,-60px,0)", "easeInCubic" ]
-            },
-            "100%": {
-                transform: [ "scale3d(1,1,1) translate3d(0,0,0)", [ .175, .885, .32, 1 ] ]
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "zoomOut", {
-            duration: 1e3,
-            "0%": {
-                transform: "scale3d(1,1,1)"
-            },
-            "50%": {
-                opacity: "1"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "scale3d(0.3,0.3,0.3)"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "zoomOutDown", {
-            duration: 1e3,
-            "0%": {
-                transform: "scale3d(1,1,1) translate3d(0,0,0)"
-            },
-            "40%": {
-                opacity: "1",
-                transform: [ "scale3d(0.475,0.475,0.475) translate3d(0,60px,0)", [ .55, .055, .675, .19 ] ]
-            },
-            "100%": {
-                opacity: "0",
-                transform: [ "scale3d(0.1,0.1,0.1) translate3d(0,-1000px,0)", [ .175, .885, .32, 1 ] ]
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "zoomOutLeft", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1",
-                transform: "scale(1) translate3d(0,0,0)",
-                transformOrigin: "left center"
-            },
-            "40%": {
-                opacity: "1",
-                transform: "scale(0.475) translate3d(42px,0,0)"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "scale(0.1) translate3d(-2000px,0,0)",
-                transformOrigin: "left center"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "zoomOutRight", {
-            duration: 1e3,
-            "0%": {
-                opacity: "1",
-                transform: "scale(1) translate3d(0,0,0)",
-                transformOrigin: "right center"
-            },
-            "40%": {
-                opacity: "1",
-                transform: "scale(0.475) translate3d(-42px, 0, 0)"
-            },
-            "100%": {
-                opacity: "0",
-                transform: "scale(0.1) translate3d(2000px, 0, 0)",
-                transformOrigin: "right center"
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-/*
- * VelocityJS.org (C) 2014-2017 Julian Shapiro.
- *
- * Licensed under the MIT license. See LICENSE file in the project root for details.
- *
- * Based on animate.css: https://github.com/daneden/animate.css
- */
-var VelocityStatic;
-
-(function(VelocityStatic) {
-    var UI;
-    (function(UI) {
-        Velocity("registerSequence", "zoomOutUp", {
-            duration: 1e3,
-            "0%": {
-                transform: "scale3d(1,1,1) translate3d(0,0,0)"
-            },
-            "40%": {
-                opacity: "1",
-                transform: [ "scale3d(0.475,0.475,0.475) translate3d(0,-60px,0)", [ .55, .055, .675, .19 ] ]
-            },
-            "100%": {
-                opacity: "0",
-                transform: [ "scale3d(0.1,0.1,0.1) translate3d(0,1000px,0)", [ .175, .885, .32, 1 ] ]
-            }
-        });
-    })(UI = VelocityStatic.UI || (VelocityStatic.UI = {}));
-})(VelocityStatic || (VelocityStatic = {}));
-
-var _loop_2 = function(key) {
+ will produce an inaccurate conversion value. The same issue exists with the cx/cy attributes of SVG circles and ellipses. */ var _loop_3 = function(key) {
     var value = VelocityStatic[key];
     if (isString(value) || isNumber(value) || isBoolean(value)) {
         Object.defineProperty(VelocityFn, key, {
@@ -7033,13 +4604,6 @@ var _loop_2 = function(key) {
     }
 };
 
-///<reference path="../index.d.ts" />
-///<reference path="constants.ts" />
-///<reference path="types.ts" />
-///<reference path="utility.ts" />
-///<reference path="Velocity/_all.d.ts" />
-///<reference path="core.ts" />
-///<reference path="ui/_all.d.ts" />
 /*
  * VelocityJS.org (C) 2014-2017 Julian Shapiro.
  *
@@ -7049,10 +4613,7 @@ var _loop_2 = function(key) {
  * use. This is done as a read-only way. Any attempt to change these values will
  * be allowed.
  */ for (var key in VelocityStatic) {
-    _loop_2(key);
+    _loop_3(key);
 }
-// console.log("Velocity keys", Object.keys(VelocityStatic));
-//# sourceMappingURL=velocity.js.map
-//# sourceMappingURL=velocity.js.map
 	return VelocityFn;
 }));
