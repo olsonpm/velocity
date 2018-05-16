@@ -28,14 +28,7 @@
     }
   ],
   "main": "velocity.js",
-  "types": "index.d.ts",
   "repository": "julianshapiro/velocity",
-  "files": [
-    "velocity.js",
-    "velocity.min.js",
-    "velocity.ui.js",
-    "velocity.ui.min.js"
-  ],
   "devDependencies": {
     "@types/qunit": "^2.0.31",
     "grunt": "^1.0.2",
